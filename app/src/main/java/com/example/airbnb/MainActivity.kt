@@ -1,29 +1,64 @@
 package com.example.airbnb
 
+import android.content.ClipData
+import android.content.Intent
 import android.graphics.Color
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.util.Log
+import android.widget.TextView
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import androidx.viewpager2.widget.ViewPager2
+import com.example.airbnb.model.HouseDto
 import com.example.airbnb.model.HouseModel
-import com.example.airbnb.model.Item
 import com.naver.maps.geometry.LatLng
 import com.naver.maps.map.*
 import com.naver.maps.map.overlay.Marker
+import com.naver.maps.map.overlay.Overlay
 import com.naver.maps.map.util.FusedLocationSource
 import com.naver.maps.map.util.MarkerIcons
+import com.naver.maps.map.widget.LocationButtonView
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
-class MainActivity : AppCompatActivity(), OnMapReadyCallback {
+class MainActivity : AppCompatActivity(), OnMapReadyCallback, Overlay.OnClickListener {
 
     private lateinit var naverMap: NaverMap
     private lateinit var locationSource: FusedLocationSource
 
+    private val currentLocationButton : LocationButtonView by lazy {
+        findViewById(R.id.currentLocationButton)
+    }
+
+    private val viewPager : ViewPager2 by lazy {
+        findViewById(R.id.houseViewPager)
+    }
+
+    private val viewPagerAdapter = HouseViewPagerAdapter(itemClicked = {
+        val intent = Intent()
+            .apply {
+                action = Intent.ACTION_SEND
+                putExtra(Intent.EXTRA_TEXT, "[지금 이 가격에 예약하세요!!!] ${it.title} ${it.price} 사진보기 : ${it.imageUrl}")
+                type = "text/plain"
+            }
+        startActivity(Intent.createChooser(intent, null))
+    })
+    private val recyclerViewAdapter = HouseListAdapter()
+
     private val mapView : MapView by lazy {
         findViewById(R.id.mapView)
+    }
+
+    private val recyclerView : RecyclerView by lazy {
+        findViewById(R.id.recyclerView)
+    }
+
+    private val bottomSheetTextView : TextView by lazy {
+        findViewById(R.id.bottomSheetTitleTextView)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -31,10 +66,26 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         setContentView(R.layout.activity_main)
 
         val address = "https://run.mocky.io/v3/f76e4040-abed-48c8-bfb6-5ecabc7ddb5a"
+        val addres2 = "https://run.mocky.io/v3/c3e88fdb-18f1-4a80-b546-be68720859db"
 
         mapView.onCreate(savedInstanceState)
-
         mapView.getMapAsync(this)
+
+        viewPager.adapter = viewPagerAdapter
+        recyclerView.adapter = recyclerViewAdapter
+        recyclerView.layoutManager = LinearLayoutManager(this)
+
+        viewPager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
+            override fun onPageSelected(position: Int) {
+                super.onPageSelected(position)
+
+                val selectedHouseModel = viewPagerAdapter.currentList.get(position)
+                val cameraUpdate = CameraUpdate.scrollTo(LatLng(selectedHouseModel.lat!!, selectedHouseModel.lon!!))
+                    .animate(CameraAnimation.Easing)
+                naverMap.moveCamera(cameraUpdate)
+
+            }
+        })
 
     }
 
@@ -48,7 +99,9 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         naverMap.moveCamera(cameraUpdate)
 
         val uiSettings = naverMap.uiSettings
-        uiSettings.isLocationButtonEnabled = true
+        uiSettings.isLocationButtonEnabled = false
+
+        currentLocationButton.map = naverMap
 
         locationSource = FusedLocationSource(this, LOCATION_PERMISSION_REQUEST_CODE)
         naverMap.locationSource = locationSource
@@ -68,30 +121,36 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 //            })
 //        }
         val retrofitService = retrofit.create(HouseService::class.java)
-        retrofitService.getHouseList().enqueue(object : Callback<HouseModel> {
-            override fun onResponse(call: Call<HouseModel>, response: Response<HouseModel>) {
+        retrofitService.getHouseList().enqueue(object : Callback<HouseDto> {
+            override fun onResponse(call: Call<HouseDto>, response: Response<HouseDto>) {
                 if(response.isSuccessful.not()) {
                     return
                 }
                 response.body()?.let { dto ->
                     Log.d("retrofit ", "${dto.toString()}")
                     updateMarker(dto.items)
+                    viewPagerAdapter.submitList(dto.items)
+                    recyclerViewAdapter.submitList(dto.items)
+
+                    bottomSheetTextView.text = "${dto.items.size}개의 숙소 "
                 }
 
             }
 
-            override fun onFailure(call: Call<HouseModel>, t: Throwable) {
+            override fun onFailure(call: Call<HouseDto>, t: Throwable) {
 
             }
 
         })
     }
 
-    private fun updateMarker(house: List<Item>?) {
+    private fun updateMarker(house: List<HouseModel>?) {
         house?.forEach { house ->
             val marker = Marker()
             marker.position = LatLng(house.lat!!, house.lon!!)
             //marker.onClickListener
+            marker.onClickListener = this
+
             marker.map = naverMap
             marker.tag = house.id
             marker.icon = MarkerIcons.BLACK
@@ -119,6 +178,18 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 
     }
 
+    override fun onClick(overlay: Overlay): Boolean {
+        overlay.tag
+
+        val selectedModel = viewPagerAdapter.currentList.firstOrNull {
+            it.id == overlay.tag
+        }
+        selectedModel?.let {
+            val position = viewPagerAdapter.currentList.indexOf(it)
+            viewPager.currentItem = position
+        }
+        return true
+    }
 
 
     override fun onStart() {
@@ -153,6 +224,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
     companion object {
         private const val LOCATION_PERMISSION_REQUEST_CODE = 1000
     }
+
 
 
 }
